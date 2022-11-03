@@ -1,20 +1,14 @@
 
 """
-This file is a python setup to generate beautiful plots at
-publication standard
-
-written: J P Clarke
+Python class to automate the generation of beautiful plots at
+academic publication standard.
 """
 
-"""
-import utils.plot4paper as p4p
-"""
-
-#matplotlib.use('Agg')
 
 import numpy as np
 import sys
 
+#matplotlib.use('Agg')
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
@@ -27,58 +21,20 @@ try:
     import commands   as comsub
 except:
     import subprocess as comsub
+    
+import configparser
 
 
-def colors(key=None) :
+# load the configuration containing the tex column- page- and line-widths
+config = configparser.ConfigParser(
+    allow_no_value=True
+)
+config.read( "config.ini" )
 
-    colors = [[.2, .2, .5], [0., .4, 1.], [0., .8, 1.],[1., .8, 0.], [1., .4, 0.], [1.,0.,0.]][::-1]
+# list of all implemented templates
+astronomy_journal = ['mnras', 'apj', 'aa', 'iau']
+university_thesis = ['lmu']
 
-    if isinstance( key , type(None) )==True :
-        return colors
-
-    #define set of nice colors
-    keys = ["r","o","y","lb","b","db"]
-    if key not in keys:
-        raise ValueError( "Key not recognised. Acceptable values are ","r ","o ","y ","lb ","b ","db " )
-
-    return colors[ key==keys ]
-
-
-def setFigSize( height, width, verbose) :
-    w = width  / 72.27
-    h = height / 72.27
-    if verbose :
-        print("Figure size in inches: ", [w,h])
-    return (w,h)
-
-def getPageSetups(key) :
-    """
-    This could all be moved to a config file along with the save appendix label
-    """
-    if key=="mnras" :
-        texcolumnwidth = 240.
-        texlinewidth   = 504.0
-        texheight      = 682.
-    elif key=="AA" :
-        texcolumnwidth = 256.0748
-        texlinewidth   = 523.5307
-        texheight      = 705.0
-    elif key=="apj" :
-        texcolumnwidth = 245.26653
-        texlinewidth   = 513.11743
-        texheight      = 675.83984
-    elif key=="iau" :
-        texcolumnwidth = 384.0
-        texlinewidth   = 384.0
-        texheight      = 595.5
-    elif key=="lmu" :
-        texcolumnwidth = 460.72124
-        texlinewidth   = texcolumnwidth
-        texheight      = 621.0
-
-    else :
-        raise ValueError("Key not recognised. Options are ['mnras','AA','apj','iau','lmu']")
-    return [texcolumnwidth,texlinewidth,texheight]
 
 
 
@@ -89,79 +45,124 @@ def getPageSetups(key) :
 
 class qualfig(object) :
 
-    """
-    import utils.plot4paper as p4p
-    qualfig = p4p.qualfig()
+    """Class to automate basic formatting of plots to ensure consistency.
     """
 
-    def __init__(self,key=None,ncols=1,heightFrac="gr",verbose=False) :
+    def __init__(self,
+                 ncols=1,
+                 hf="gr",
+                 wf=None,
+                 key=None,
+                 verbose=False) :
 
         """
-        initialisation function
-        key - the journal for which the figure is being produced
-        ncols -  the number of columns for the figure to span
-        heightFrac - the fraction of the page the figure should occupy
-        verbose - print various messages at run time
+        :param ncols: Number of columns the plot should span. Default: 1
+        :param hf: The fractional height of the plot relative to the width. Default: Golden Ratio
+        :param wf: The fractional width of the plot relative to full page width. Default: None
+        :param key: The publication template name. Default: None
+        :param verbose: Print general helper descriptions during plotting process. Default: False
         """
-
-        # now get the savename...
-        if key is None :
-            key="mnras"
-            self.saveapp=".pdf"
-        elif key=="mnras" :
-            self.saveapp="_ForMNRAS.pdf"
-        elif key=="lmu" :
-            self.saveapp="_ForThesis.pdf"
+        
+        permitted_keys = astronomy_journal + university_thesis
+        self.__verbose = verbose
+        
+        # load the configuration for the plot type we are using...
+        if key is not None:
+            if key not in permitted_keys:
+                raise KeyError("Selected key '"+"{}".format(key)+"' is not yet implemented...\n"+\
+                               "Permitted keys are:\n{}".format(permitted_keys))
+            else :
+                plot_conf = config.__getitem__(key.upper())
+                
         else :
-            self.saveapp=".pdf"
+            if self.__verbose : 
+                print("Using the DEFAULT configuration...")
+        
+        
+        # load the save file suffix
+        self.__save_suffix = plot_conf.get( "savesuf" ) + ".pdf"
+        
+        
+        # define the plot width
+        if ncols == 1 :
+            # plot should span one column
+            self.__width = plot_conf.getfloat( "texcolumnwidth" )
+            
+        elif ncols == 2 :
+            # plot should span both columns
+            self.__width = plot_conf.getinfloat( "texlinewidth" )
+            
+        elif ncols is None:
+            # plot should span a defined fraction of the full-page width
+            if wf is not None :
+                self.__width = plot_conf.getfloat( "texlinewidth" ) * wf
+            else :
+                raise ValueError("Please define the full-page width fraction you wish to use...")
+        
+        else :
+            raise ValueError("Value of argument ncols, {}, is invalid".format(ncols))
+            
+            
+        # define the plot height
+        max_height = plot_conf.getfloat( "texheight" )
+        if hf is None :
+            # if height fraction isn't specified provide space for a caption
+            self.__height = 0.80 * max_height
+            
+        elif hf=="gr" :
+            # make the plot have golden ratio size
+            golden_ratio = 2.0 / (1.0 + np.sqrt(5.0))
+            self.__height = self.__width * golden_ratio
+            
+        else :
+            # else we set the height as a fraction of the plot width
+            self.__height = self.__width * hf
 
-        self._verbose=verbose
+        if self.__height > max_height :
+            raise ValueError("Figure height exceeds page height..."+\
+                             "\n"+\
+                             "Maximum possible value of hf is {:4.3f}".format(max_height/self.__width))
+            
+        
+        # convert width and height to matplotlib inch units
+        self.__inches_to_points = 72.27# define the conversion from inch to pt length measurements
+        
+        if self.__verbose :
+            print("Figure size in inches: {w} x {h}".format(
+                w=self.__width / self.__inches_to_points,
+                h=self.__height / self.__inches_to_points
+            ))
 
-        #Get the
-        [texcolumnwidth,texlinewidth,texheight] = getPageSetups(key)
-
-        #Settings for nice plots in mnras publications
-        font_size =  8
-        linewidth = 0.5
-        self.__lw = linewidth
+        
+        # Plot border settings for nice publication worthy plots
         rcParams['figure.subplot.top'] = 0.95
+        
         if ncols==1:
-            self.width = texcolumnwidth
-
             rcParams['figure.subplot.bottom'] = 0.2
             rcParams['figure.subplot.left'] = 0.16
             rcParams['figure.subplot.right'] = 0.84
 
         elif ncols==2 :
-            self.width = texlinewidth
-
             rcParams['figure.subplot.bottom'] = 0.1
             rcParams['figure.subplot.left'] = 0.08
             rcParams['figure.subplot.right'] = 0.92
-
-        elif ncols==1./3. :
-            self.width = texlinewidth/3.
-
+            
+        else :
+            print("Using a fractional plot width will likely require manually setting the plot borders")
             rcParams['figure.subplot.bottom'] = 0.2
             rcParams['figure.subplot.left'] = 0.16
             rcParams['figure.subplot.right'] = 0.84
 
-        else :
-            raise ValueError("Don't understand the input number of columns...")
+        
 
-        if isinstance( heightFrac , type(None) )==True :
-            figheight = 0.85*texheight # we will of course require some space for the caption
-        elif heightFrac=="gr" :
-            # make the plot have golden ratio size
-            figheight = self.width * 2./(1.+np.sqrt(5.)) / (1.-rcParams['figure.subplot.bottom'])
-        else :
-            figheight = self.width * heightFrac
-
-        if figheight>texheight :
-            raise ValueError("Figure height exceeds page height...\nMaximum heightFrac value is {:4.3f}".format(texheight/self.width))
-
-        rcParams['figure.figsize'] = setFigSize(height=figheight,width=self.width,verbose=self._verbose)
-
+        rcParams['figure.figsize'] = (
+            self.__width / self.__inches_to_points, 
+            self.__height / self.__inches_to_points
+        )
+        
+        # configure text and line widths
+        font_size =  8
+        linewidth = 0.5
 
         rcParams['font.size'] = font_size
         rcParams['axes.labelsize'] = font_size
@@ -171,8 +172,8 @@ class qualfig(object) :
         rcParams['xtick.minor.width'] = linewidth-0.1
         rcParams['ytick.major.width'] = linewidth-0.1
         rcParams['ytick.minor.width'] = linewidth-0.1
-        rcParams["lines.linewidth"] = linewidth # thickness of contour plots ets
-        rcParams["grid.linewidth"]  = linewidth # thickness of contour plots ets
+        rcParams["lines.linewidth"] = linewidth 
+        rcParams["grid.linewidth"]  = linewidth 
 
         rcParams['xtick.minor.visible'] = True
         rcParams['ytick.minor.visible'] = True
@@ -204,43 +205,50 @@ class qualfig(object) :
         # determine the new cycling order
         rcParams['axes.prop_cycle'] = cycler(color='brckmgy')
 
-        self.dpi=1000
+        self.__dpi=1000
 
+        
     def is_colorbar_axis(self,AXIS) :
+        """Function to tell script an axis is a colourbar axis. 
+        Reconfigures the tick settings.
+        
+        """
 
         AXIS.minorticks_off()
         AXIS.tick_params(which="major",direction="out")
 
 
-
-    @property
-    def linewidth(self) :
-        return self.__lw
-
     def set_label_spaces(self,side=None,bottom=None,top=None,left=None,right=None):
-        if (isinstance( side , type(None) )==False) & ( (isinstance( left , type(None) )==False) | (isinstance( right , type(None) )==False) ) :
-            raise ValueError("side and left/right are simultaneously defined...")
+        """Function to customise the plot whitespace borders 
+        
+        """
+        
+        # check for conflicting instructions
+        side_is_not_None = side is not None
+        left_is_not_None = left is not None
+        right_is_not_None = right is not None
+        
+        if side_is_not_None and ( left_is_not_None or right_is_not_None ) :
+            print("WARNING: Defaulting to the setting for --side--")
 
-        if isinstance( side , type(None) )==False :
+        if side_is_not_None  :
             rcParams['figure.subplot.left'] = side
             rcParams['figure.subplot.right'] = 1-side
+            
+        else: 
 
-        if (isinstance( left , type(None) )==False) :
-            rcParams['figure.subplot.left'] = left
+            if left_is_not_None :
+                rcParams['figure.subplot.left'] = left
 
-        if (isinstance( right , type(None) )==False) :
-            rcParams['figure.subplot.right'] = 1-right
+            if right_is_not_None :
+                rcParams['figure.subplot.right'] = 1-right
 
-        if isinstance( bottom , type(None) )==False :
+        if bottom is not None :
             rcParams['figure.subplot.bottom'] = bottom
 
-        if isinstance( top , type(None) )==False :
+        if top is not None :
             rcParams['figure.subplot.top'] = 1.-top
 
-    def printLabelSpaces(self):
-        print("side : ", rcParams['figure.subplot.left'])
-        print("bottom : ", rcParams['figure.subplot.bottom'])
-        print("top : ", rcParams['figure.subplot.top'])
 
     def _crop_figure(self,fname,dpi) :
         """
@@ -252,29 +260,29 @@ class qualfig(object) :
         command = 'gs -sDEVICE=bbox -dNOPAUSE -dBATCH %s'%name
         r = comsub.getoutput(command).split()
         bbox = [float(a) for a in r[-4:]]
-        os.system("pdfcrop %s %s --bbox \" %.6f %.6f %.6f %.6f \" " % (name, fname,0, bbox[1], self.width, bbox[3]))
+        print(bbox)
+        os.system("pdfcrop %s %s --bbox \" %.6f %.6f %.6f %.6f \" " % (name, fname,0, bbox[1], self.__width, bbox[3]))
         command = 'rm %s'%(name)
         os.system(command)
 
     def save(self, fname, extension="pdf", dpi=None ):
 
         if dpi is None :
-            dpi=self.dpi
-        # strip the extension if it is there
-        if fname[-4:] ==".pdf":
+            dpi=self.__dpi
+                  
+        # strip the .pdf extension if it is there
+        if fname[-4:] == ".pdf":
             fname = fname[:-4]
+                  
         # now construct the save name we will use...
-        savename = fname+self.saveapp
+        savename = fname+self.__save_suffix
+                  
         # initially crop the figure
         self._crop_figure(savename,dpi=dpi)
-        if extension=="pdf":
-            return
-        elif extension=="eps":
+                  
+        if extension=="eps":
             # now convert to eps
             command = 'pdftops -eps %s'%(savename)
             os.system(command)
             command = 'rm %s'%(savename)
             os.system(command)
-            return
-        else :
-            return
